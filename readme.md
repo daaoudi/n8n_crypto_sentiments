@@ -47,6 +47,8 @@ mkdir crypto-analysis-platform
 cd crypto-analysis-platform
 2.	Créer la structure des fichiers
 crypto-analysis-platform/
+```markdown
+```text
 ├── data/
 │   ├── crypto_10k_tweets.csv
 │   └── clean_crypto_tweets.py
@@ -387,4 +389,5 @@ Pour toute question ou problème :
 Projet éducatif - Libre d'utilisation et modification
 
 ✨ Développé avec n8n, Flask et passion pour les cryptomonnaies ✨
+
 
