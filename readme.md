@@ -66,6 +66,7 @@ data/clean_crypto_tweets.py
 Script de nettoyage pour crypto_10k_tweets.csv
 """
 
+```
 import pandas as pd
 import re
 from datetime import datetime
@@ -104,12 +105,12 @@ def clean_crypto_tweets(input_file, output_file):
 
 if __name__ == "__main__":
     clean_crypto_tweets('crypto_10k_tweets.csv', 'crypto_tweets_cleaned.csv')
-
+```
 
 
 Étape 3 : Serveur Flask d'Analyse de Sentiment
 sentiment_server/main_sentiment_server.py
-
+```
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
@@ -212,9 +213,10 @@ def health_check():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5002, debug=True)
+```
 
 sentiment_server/requirements.txt
-
+```
 flask==2.3.3
 flask-cors==4.0.0
 vaderSentiment==3.3.2
@@ -223,15 +225,17 @@ transformers==4.31.0
 torch==2.0.1
 scipy==1.10.1
 requests==2.31.0
+```
 Étape 4 : Déployer le serveur Flask
-
+```
 cd sentiment_server
 pip install -r requirements.txt
 python main_sentiment_server.py
-
+```
 
 
 Étape 5 : Configuration n8n
+
 1.	Accéder à n8n : http://localhost:5678
 2.	Importer le workflow : Importer le fichier workflow.json
 3.	Configurer les credentials :
@@ -256,7 +260,7 @@ o	APIs externes
 •	Gmail Node 2 : Rapport analyse de sentiment
 📊 Sorties Générées
 Rapport Crypto Market
-
+```
 📊 CRYPTO MARKET REPORT
 ├── Market Overview
 │   ├── Total Cryptocurrencies
@@ -272,8 +276,9 @@ Rapport Crypto Market
     ├── BTC %
     ├── ETH %
     └── Other %
+```
 Rapport Analyse de Sentiment
-
+```
 📈 SENTIMENT ANALYSIS REPORT
 ├── Executive Summary
 │   ├── Total Analysis
@@ -288,7 +293,7 @@ Rapport Analyse de Sentiment
     ├── Positive %
     ├── Negative %
     └── Neutral %
-
+```
 
 
 
@@ -348,21 +353,23 @@ Intervalle	Type de Rapport	Destinataire	Description
 
 📝 Personnalisation
 Modifier la fréquence
-
+```
 // Dans le Schedule Trigger
 {
   "field": "minutes",
   "minutesInterval": 60  // Changer à 60 minutes
 }
-
+```
 Ajouter de nouvelles cryptomonnaies
-
+```
 // Dans la requête CoinGecko
 "ids": "bitcoin,ethereum,cardano,polkadot,solana,chainlink,avalanche,polygon,algorand,cosmos,doge,shiba-inu"
+```
 Modifier le destinataire
-javascript
+```
 // Dans les fonctions Code
 to: "test@email.com"  // Remplacer l'email
+```
 📊 Métriques de Performance
 •	Temps d'exécution : ~2-3 minutes par cycle
 •	Traitement de données : 100+ cryptomonnaies, 100+ tweets
@@ -389,6 +396,7 @@ Pour toute question ou problème :
 Projet éducatif - Libre d'utilisation et modification
 
 ✨ Développé avec n8n, Flask et passion pour les cryptomonnaies ✨
+
 
 
 
