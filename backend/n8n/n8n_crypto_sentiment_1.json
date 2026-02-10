@@ -1,0 +1,377 @@
+{
+  "name": "n8n_crypto_sentiment",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            },
+            {}
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -576,
+        -176
+      ],
+      "id": "6d230e4f-5fd7-43e7-9943-54c8dc1e2e0a",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "url": "https://api.coingecko.com/api/v3/coins/markets",
+        "sendQuery": true,
+        "specifyQuery": "json",
+        "jsonQuery": "{\n  \"vs_currency\": \"usd\",\n  \"ids\": \"bitcoin,ethereum,cardano,polkadot,solana,chainlink,avalanche,polygon,algorand,cosmos\",\n  \"order\": \"market_cap_desc\",\n  \"per_page\": \"100\",\n  \"page\": \"1\",\n  \"sparkline\": \"false\",\n  \"price_change_percentage\": \"24h\"\n}",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "{\n  \"accept\": \"application/json\"\n}",
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -320,
+        -176
+      ],
+      "id": "f6a2be80-b217-40b3-955b-367a8baa20b0",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================\n// FORMAT CRYPTO API DATA (CoinGecko)\n// Enhanced version - PROCESSES ALL ITEMS\n// ============================================\n\nconsole.log(\"=== FORMATTING CRYPTO API DATA ===\");\nconsole.log(`Received ${items.length} items to process`);\n\ntry {\n  // Check if we have input\n  if (!items || items.length === 0) {\n    throw new Error(\"No input items received\");\n  }\n  \n  let allCryptoData = [];\n  let formattedData = [];\n  let skippedItems = [];\n  \n  // Process EACH item, not just the first one\n  items.forEach((item, itemIndex) => {\n    console.log(`\\n--- Processing item ${itemIndex + 1}/${items.length} ---`);\n    \n    if (!item || !item.json) {\n      console.log(`⚠️ Item ${itemIndex} has no json data, skipping`);\n      skippedItems.push({ itemIndex, reason: 'No json data' });\n      return;\n    }\n    \n    const response = item.json;\n    \n    console.log(`Item ${itemIndex} type:`, typeof response);\n    console.log(`Item ${itemIndex} is array?`, Array.isArray(response));\n    \n    let cryptoData = [];\n    \n    // Handle different API response formats for THIS item\n    if (Array.isArray(response)) {\n      // Direct array response (most common)\n      cryptoData = response;\n      console.log(`✅ Item ${itemIndex}: Processing ${cryptoData.length} cryptocurrencies from array`);\n      \n    } else if (response && typeof response === 'object') {\n      // Object response - check common CoinGecko formats\n      \n      if (response.data && Array.isArray(response.data)) {\n        cryptoData = response.data;\n        console.log(`✅ Item ${itemIndex}: Found ${cryptoData.length} items in response.data`);\n        \n      } else if (response.markets && Array.isArray(response.markets)) {\n        cryptoData = response.markets;\n        console.log(`✅ Item ${itemIndex}: Found ${cryptoData.length} items in response.markets`);\n        \n      } else if (response.coins && Array.isArray(response.coins)) {\n        cryptoData = response.coins;\n        console.log(`✅ Item ${itemIndex}: Found ${cryptoData.length} items in response.coins`);\n        \n      } else {\n        // Try to find any array in the object\n        const arrayKeys = Object.keys(response).filter(key => Array.isArray(response[key]));\n        \n        if (arrayKeys.length > 0) {\n          cryptoData = response[arrayKeys[0]];\n          console.log(`✅ Item ${itemIndex}: Found ${cryptoData.length} items in response.${arrayKeys[0]}`);\n        } else if (response.id || response.symbol) {\n          // Single coin object\n          cryptoData = [response];\n          console.log(`✅ Item ${itemIndex}: Processing single cryptocurrency object`);\n        } else {\n          console.log(`❌ Item ${itemIndex}: Unrecognized response format:`, Object.keys(response));\n          skippedItems.push({ itemIndex, reason: 'Unrecognized format' });\n          return;\n        }\n      }\n    } else {\n      console.log(`❌ Item ${itemIndex}: Unexpected response type:`, typeof response);\n      skippedItems.push({ itemIndex, reason: 'Unexpected type' });\n      return;\n    }\n    \n    // Add to our collection\n    allCryptoData = allCryptoData.concat(cryptoData);\n    \n    // Process each coin in this item\n    cryptoData.forEach((coin, coinIndex) => {\n      try {\n        const globalIndex = formattedData.length;\n        \n        // Validate coin data\n        if (!coin || typeof coin !== 'object') {\n          skippedItems.push({ \n            itemIndex, \n            coinIndex, \n            reason: 'Invalid coin object' \n          });\n          return;\n        }\n        \n        // Check for required fields\n        const hasSymbol = coin.symbol || coin.base || coin.asset;\n        const hasName = coin.name || coin.base || coin.asset;\n        const hasPrice = coin.current_price !== undefined || \n                        coin.price !== undefined || \n                        coin.last !== undefined;\n        \n        if (!hasSymbol || !hasName || !hasPrice) {\n          skippedItems.push({ \n            itemIndex, \n            coinIndex, \n            reason: 'Missing required fields',\n            symbol: coin.symbol,\n            name: coin.name \n          });\n          return;\n        }\n        \n        // Extract data with fallbacks\n        const symbol = (coin.symbol || coin.base || coin.asset || 'UNKNOWN').toUpperCase();\n        const name = coin.name || coin.base || coin.asset || 'Unknown Cryptocurrency';\n        \n        // Get price with multiple fallback options\n        let price = 0;\n        if (coin.current_price !== undefined) price = coin.current_price;\n        else if (coin.price !== undefined) price = coin.price;\n        else if (coin.last !== undefined) price = coin.last;\n        else if (coin.close !== undefined) price = coin.close;\n        \n        // Get price change percentage\n        let priceChangePercent = 0;\n        if (coin.price_change_percentage_24h !== undefined) {\n          priceChangePercent = coin.price_change_percentage_24h;\n        } else if (coin.priceChange24h !== undefined) {\n          priceChangePercent = coin.priceChange24h;\n        } else if (coin.change24h !== undefined) {\n          priceChangePercent = coin.change24h;\n        }\n        \n        // Get market data\n        const volume = coin.total_volume || coin.volume || coin.volume24h || 0;\n        const marketCap = coin.market_cap || coin.marketCap || 0;\n        const marketCapRank = coin.market_cap_rank || coin.rank || 999;\n        \n        // Create formatted object\n        const formattedCoin = {\n          // Timestamp\n          timestamp: new Date().toISOString(),\n          data_source: 'coingecko_api',\n          source_item: itemIndex,\n          \n          // Basic coin info\n          cryptocurrency: symbol,\n          coin_id: coin.id || symbol.toLowerCase(),\n          coin_name: name,\n          \n          // Price data\n          current_price_usd: parseFloat(price.toFixed(6)),\n          price_change_24h_usd: coin.price_change_24h || 0,\n          price_change_24h_percent: parseFloat(priceChangePercent.toFixed(4)),\n          \n          // Market data\n          trading_volume_24h: parseFloat(volume.toFixed(2)),\n          market_cap_usd: parseFloat(marketCap.toFixed(2)),\n          market_cap_rank: marketCapRank,\n          \n          // Price range\n          high_24h: coin.high_24h || coin.high || coin.high24h || price,\n          low_24h: coin.low_24h || coin.low || coin.low24h || price,\n          \n          // Supply data\n          circulating_supply: coin.circulating_supply || 0,\n          total_supply: coin.total_supply || 0,\n          max_supply: coin.max_supply || null,\n          \n          // Metadata\n          last_updated: coin.last_updated || new Date().toISOString(),\n          ath: coin.ath || null,\n          ath_change_percentage: coin.ath_change_percentage || null,\n          ath_date: coin.ath_date || null,\n          \n          // Placeholders for sentiment integration\n          social_sentiment_score: 0,\n          social_mentions_count: 0,\n          news_sentiment_score: 0,\n          overall_sentiment: 'neutral',\n          \n          // Raw data reference\n          raw_symbol: coin.symbol,\n          raw_name: coin.name,\n          raw_id: coin.id\n        };\n        \n        formattedData.push({\n          json: formattedCoin,\n          pairedItem: { item: itemIndex }\n        });\n        \n        // Log first few coins from each item\n        if (globalIndex < 3) {\n          console.log(`[Sample ${globalIndex + 1}] ${symbol}: $${formattedCoin.current_price_usd} (${formattedCoin.price_change_24h_percent}%)`);\n        }\n        \n      } catch (error) {\n        console.error(`Error processing coin ${coinIndex} in item ${itemIndex}:`, error.message);\n        skippedItems.push({ \n          itemIndex, \n          coinIndex, \n          reason: `Processing error: ${error.message}` \n        });\n      }\n    });\n  });\n  \n  console.log(`\\n📊 FINAL PROCESSING SUMMARY:`);\n  console.log(`✅ Total items processed: ${items.length}`);\n  console.log(`✅ Successfully formatted: ${formattedData.length} cryptocurrencies`);\n  console.log(`❌ Skipped items/coins: ${skippedItems.length}`);\n  \n  if (skippedItems.length > 0) {\n    console.log('Skipped items/coins (first 5):', skippedItems.slice(0, 5));\n  }\n  \n  // Remove duplicates based on cryptocurrency symbol\n  const uniqueData = [];\n  const seenSymbols = new Set();\n  \n  formattedData.forEach(item => {\n    const symbol = item.json.cryptocurrency;\n    if (!seenSymbols.has(symbol)) {\n      seenSymbols.add(symbol);\n      uniqueData.push(item);\n    } else {\n      console.log(`Removing duplicate: ${symbol}`);\n    }\n  });\n  \n  console.log(`Unique cryptocurrencies: ${uniqueData.length}`);\n  \n  // If we have data, add statistics\n  if (uniqueData.length > 0) {\n    // Calculate market statistics\n    const prices = uniqueData.map(item => item.json.current_price_usd);\n    const changes = uniqueData.map(item => item.json.price_change_24h_percent);\n    \n    const stats = {\n      total_cryptocurrencies: uniqueData.length,\n      average_price: parseFloat((prices.reduce((a, b) => a + b, 0) / prices.length).toFixed(2)),\n      average_daily_change: parseFloat((changes.reduce((a, b) => a + b, 0) / changes.length).toFixed(2)),\n      top_gainer: uniqueData.reduce((max, item) => \n        item.json.price_change_24h_percent > max.json.price_change_24h_percent ? item.json : max.json\n      ).cryptocurrency,\n      top_loser: uniqueData.reduce((min, item) => \n        item.json.price_change_24h_percent < min.json.price_change_24h_percent ? item.json : min.json\n      ).cryptocurrency,\n      market_dominance: uniqueData\n        .filter(item => item.json.cryptocurrency === 'BTC' || item.json.cryptocurrency === 'ETH')\n        .map(item => ({\n          coin: item.json.cryptocurrency,\n          dominance: parseFloat(((item.json.market_cap_usd / \n            uniqueData.reduce((sum, i) => sum + i.json.market_cap_usd, 0)) * 100).toFixed(2))\n        }))\n    };\n    \n    // Add stats to all items (or just first)\n    uniqueData.forEach((item, index) => {\n      if (index === 0) {\n        item.json.market_statistics = stats;\n      }\n    });\n    \n    console.log('\\n📈 MARKET STATISTICS:');\n    console.log(`Average price: $${stats.average_price}`);\n    console.log(`Average daily change: ${stats.average_daily_change}%`);\n    console.log(`Top gainer: ${stats.top_gainer}`);\n    console.log(`Top loser: ${stats.top_loser}`);\n    if (stats.market_dominance.length > 0) {\n      stats.market_dominance.forEach(d => {\n        console.log(`${d.coin} dominance: ${d.dominance}%`);\n      });\n    }\n  }\n  \n  // Return results\n  if (uniqueData.length === 0) {\n    console.log('⚠️ No data formatted, returning error placeholder');\n    return [{\n      json: {\n        error: 'No valid cryptocurrency data could be formatted',\n        timestamp: new Date().toISOString(),\n        original_items_received: items.length,\n        skipped_items: skippedItems.length,\n        test_data: {\n          BTC: { price: 45000, change: 2.5 },\n          ETH: { price: 3000, change: 1.8 },\n          SOL: { price: 100, change: -0.5 }\n        }\n      }\n    }];\n  }\n  \n  console.log(`\\n✅ Returning ${uniqueData.length} formatted cryptocurrency items`);\n  return uniqueData;\n  \n} catch (error) {\n  console.error('❌ ERROR in crypto data formatting:', error.message);\n  console.error('Stack trace:', error.stack);\n  \n  // Return detailed error information\n  return [{\n    json: {\n      error: 'Failed to format crypto data',\n      error_message: error.message,\n      timestamp: new Date().toISOString(),\n      input_available: items ? items.length : 0,\n      suggestion: 'Check CoinGecko API response format and connectivity'\n    }\n  }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -48,
+        -176
+      ],
+      "id": "ffdb8721-1ffa-4f28-aa90-472f8c90dae9",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "url": "http://host.docker.internal:5002/csv",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {}
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -432,
+        64
+      ],
+      "id": "e44255aa-ac73-4596-9050-0e3febb6beef",
+      "name": "HTTP Request1"
+    },
+    {
+      "parameters": {
+        "operation": "fromJson",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        -192,
+        208
+      ],
+      "id": "124d1c0e-6f87-48eb-9ffc-1d2346769276",
+      "name": "Extract from File"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:5002/analyze/batch",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "{\"Content-Type\": \"application/json\"}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.textsArray }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        432,
+        -112
+      ],
+      "id": "1e096930-89b6-43de-bfe7-6cbbe7930776",
+      "name": "HTTP Request2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================\n// MERGE SENTIMENT RESULTS - Crypto API Workflow\n// ============================================\n\nconsole.log(\"=== MERGING SENTIMENT RESULTS ===\");\n\n// This node merges sentiment API results with original tweet data\n// Input: items[0] = Sentiment API response, items[1] = Original tweet data\n// OR single array if using item merging\n\nlet sentimentResults = [];\nlet originalTweets = [];\n\n// Check input structure\nconsole.log(`Received ${items.length} input items`);\n\n// Determine input structure\nif (items.length === 1 && items[0].json.results) {\n  // Case 1: Batch response with sentiment results\n  console.log(\"Detected batch sentiment response\");\n  sentimentResults = items[0].json.results;\n  \n  // Original tweets should be in the same node or we need to reconstruct\n  // This assumes we stored original data in a special field\n  if (items[0].json.original_tweets) {\n    originalTweets = items[0].json.original_tweets;\n  } else {\n    console.log(\"⚠️ Original tweets not found in batch response\");\n    // We'll use the sentiment results text to match\n  }\n  \n} else if (items.length === 2) {\n  // Case 2: Two separate inputs\n  console.log(\"Detected two separate inputs\");\n  \n  // First input: Sentiment API response\n  if (items[0].json.results) {\n    sentimentResults = items[0].json.results;\n  } else if (items[0].json.items) {\n    sentimentResults = items[0].json.items;\n  } else if (items[0].json.sentiment) {\n    // Single response\n    sentimentResults = [{\n      text: items[0].json.text,\n      sentiment: items[0].json.sentiment\n    }];\n  }\n  \n  // Second input: Original tweets\n  originalTweets = items[1];\n  \n} else if (items.length > 2) {\n  // Case 3: Merged array from previous nodes\n  console.log(\"Detected merged array\");\n  \n  // Find items with sentiment data\n  items.forEach(item => {\n    if (item.json.sentiment) {\n      sentimentResults.push({\n        text: item.json.text || item.json.Content || '',\n        sentiment: item.json.sentiment,\n        original_data: item.json\n      });\n    } else {\n      originalTweets.push(item);\n    }\n  });\n  \n} else {\n  // Case 4: Direct sentiment response mixed with data\n  console.log(\"Processing direct items\");\n  originalTweets = items;\n}\n\nconsole.log(`Found ${sentimentResults.length} sentiment results`);\nconsole.log(`Found ${originalTweets.length} original tweets`);\n\n// Merge results\nconst mergedResults = [];\n\n// Method 1: If we have matching arrays\nif (sentimentResults.length === originalTweets.length && originalTweets.length > 0) {\n  console.log(\"Matching arrays by index\");\n  \n  for (let i = 0; i < sentimentResults.length; i++) {\n    const sentiment = sentimentResults[i];\n    const original = originalTweets[i]?.json || {};\n    \n    mergedResults.push({\n      json: {\n        // Original tweet data\n        ...original,\n        \n        // Sentiment analysis results\n        sentiment_score: sentiment.sentiment?.score || 0,\n        sentiment_label: sentiment.sentiment?.label || 'neutral',\n        positive_score: sentiment.sentiment?.positive || 0,\n        negative_score: sentiment.sentiment?.negative || 0,\n        neutral_score: sentiment.sentiment?.neutral || 0,\n        crypto_adjustment: sentiment.sentiment?.crypto_adjustment || 0,\n        original_sentiment_score: sentiment.sentiment?.original_score || 0,\n        \n        // Analysis metadata\n        analyzed_at: new Date().toISOString(),\n        analysis_method: 'vader',\n        confidence: Math.abs(sentiment.sentiment?.score || 0),\n        \n        // Text info\n        text_length: sentiment.text?.length || original.text?.length || 0,\n        processed_text: sentiment.text || original.text || original.Content || ''\n      }\n    });\n  }\n  \n} else if (sentimentResults.length > 0 && originalTweets.length === 0) {\n  // Method 2: Only sentiment results, reconstruct\n  console.log(\"Reconstructing from sentiment results only\");\n  \n  sentimentResults.forEach((sentiment, index) => {\n    mergedResults.push({\n      json: {\n        // Basic tweet structure\n        tweet_id: `sentiment_${index}_${Date.now()}`,\n        text: sentiment.text || '',\n        \n        // Sentiment analysis results\n        sentiment_score: sentiment.sentiment?.score || 0,\n        sentiment_label: sentiment.sentiment?.label || 'neutral',\n        positive_score: sentiment.sentiment?.positive || 0,\n        negative_score: sentiment.sentiment?.negative || 0,\n        neutral_score: sentiment.sentiment?.neutral || 0,\n        \n        // Analysis metadata\n        analyzed_at: new Date().toISOString(),\n        analysis_method: 'vader',\n        \n        // Source info\n        source: 'crypto_api_sentiment',\n        batch_index: index\n      }\n    });\n  });\n  \n} else {\n  // Method 3: Try to match by text content\n  console.log(\"Attempting to match by text content\");\n  \n  originalTweets.forEach((tweetItem, index) => {\n    const original = tweetItem.json || tweetItem;\n    const originalText = original.text || original.Content || '';\n    \n    // Find matching sentiment by text (fuzzy match)\n    let matchingSentiment = null;\n    \n    if (originalText) {\n      // Try exact match first\n      matchingSentiment = sentimentResults.find(s => \n        s.text === originalText || \n        s.original_data?.text === originalText\n      );\n      \n      // Try partial match\n      if (!matchingSentiment) {\n        const shortText = originalText.substring(0, 50);\n        matchingSentiment = sentimentResults.find(s => \n          s.text?.includes(shortText) || \n          originalText.includes(s.text?.substring(0, 50) || '')\n        );\n      }\n    }\n    \n    // If no match found, use first available or create default\n    if (!matchingSentiment && sentimentResults.length > index) {\n      matchingSentiment = sentimentResults[index];\n    }\n    \n    mergedResults.push({\n      json: {\n        // Original tweet data\n        ...original,\n        \n        // Sentiment analysis results\n        sentiment_score: matchingSentiment?.sentiment?.score || 0,\n        sentiment_label: matchingSentiment?.sentiment?.label || 'neutral',\n        positive_score: matchingSentiment?.sentiment?.positive || 0,\n        negative_score: matchingSentiment?.sentiment?.negative || 0,\n        neutral_score: matchingSentiment?.sentiment?.neutral || 0,\n        crypto_adjustment: matchingSentiment?.sentiment?.crypto_adjustment || 0,\n        \n        // Analysis metadata\n        analyzed_at: new Date().toISOString(),\n        analysis_method: 'vader',\n        match_confidence: matchingSentiment ? 'high' : 'default',\n        \n        // Text info\n        processed_text: originalText\n      }\n    });\n  });\n}\n\n// Add sentiment statistics to first item\nif (mergedResults.length > 0) {\n  const scores = mergedResults\n    .map(item => item.json.sentiment_score)\n    .filter(score => score !== null && score !== undefined);\n  \n  const labels = mergedResults\n    .map(item => item.json.sentiment_label)\n    .filter(label => label);\n  \n  const stats = {\n    total_tweets: mergedResults.length,\n    positive_count: labels.filter(label => label === 'positive').length,\n    negative_count: labels.filter(label => label === 'negative').length,\n    neutral_count: labels.filter(label => label === 'neutral').length,\n    average_sentiment: scores.length > 0 \n      ? parseFloat((scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(4))\n      : 0,\n    min_sentiment: scores.length > 0 ? Math.min(...scores) : 0,\n    max_sentiment: scores.length > 0 ? Math.max(...scores) : 0,\n    sentiment_distribution: {\n      positive_pct: ((labels.filter(l => l === 'positive').length / labels.length) * 100).toFixed(1) + '%',\n      negative_pct: ((labels.filter(l => l === 'negative').length / labels.length) * 100).toFixed(1) + '%',\n      neutral_pct: ((labels.filter(l => l === 'neutral').length / labels.length) * 100).toFixed(1) + '%'\n    }\n  };\n  \n  // Add stats to first item\n  mergedResults[0].json.sentiment_statistics = stats;\n  \n  console.log(\"\\n📊 SENTIMENT STATISTICS:\");\n  console.log(`Total tweets analyzed: ${stats.total_tweets}`);\n  console.log(`Positive: ${stats.positive_count} (${stats.sentiment_distribution.positive_pct})`);\n  console.log(`Negative: ${stats.negative_count} (${stats.sentiment_distribution.negative_pct})`);\n  console.log(`Neutral: ${stats.neutral_count} (${stats.sentiment_distribution.neutral_pct})`);\n  console.log(`Average sentiment score: ${stats.average_sentiment}`);\n}\n\nconsole.log(`\\n✅ Successfully merged ${mergedResults.length} tweets with sentiment analysis`);\nreturn mergedResults;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        496,
+        128
+      ],
+      "id": "fb3dbe31-d255-4606-92a8-a8dad54256c2",
+      "name": "Code in JavaScript2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================\n// FIXED: PREPARE TEXTS FOR SENTIMENT API\n// ============================================\n\nconsole.log(\"=== PREPARING TEXTS ===\");\n\n// Extract texts from items\nconst texts = [];\n\nitems.forEach((item, index) => {\n  try {\n    const data = item.json;\n    \n    // Debug first 2 items\n    if (index < 2) {\n      console.log(`\\nItem ${index} - Keys:`, Object.keys(data));\n    }\n    \n    // Try different field names\n    const text = data.Content || data.content || data.text || data.cleaned_text || '';\n    \n    if (text && typeof text === 'string' && text.trim() !== '') {\n      const cleanText = text.trim();\n      texts.push(cleanText);\n      \n      if (index < 2) {\n        console.log(`✅ Found text: ${cleanText.substring(0, 60)}...`);\n      }\n    } else if (index < 2) {\n      console.log(`❌ No text in item ${index}. Checking all fields:`);\n      Object.keys(data).forEach(key => {\n        const val = data[key];\n        if (typeof val === 'string' && val.trim().length > 10) {\n          console.log(`  \"${key}\": ${val.substring(0, 50)}...`);\n        }\n      });\n    }\n  } catch (error) {\n    console.error(`Error with item ${index}:`, error.message);\n  }\n});\n\nconsole.log(`\\n📊 Extracted ${texts.length} texts from ${items.length} items`);\n\n// CRITICAL: If no texts, use fallback\nif (texts.length === 0) {\n  console.error(\"❌ NO TEXTS FOUND! Using fallback data.\");\n  \n  // Fallback test data\n  const fallbackTexts = [\n    \"Bitcoin is bullish today! Price action looks strong. 🚀\",\n    \"Ethereum network upgrade completed successfully. Great news for ETH holders!\",\n    \"Crypto market sentiment is mixed. Some fear, some greed. #crypto\",\n    \"Altcoin season might be coming soon. Keep an eye on SOL and AVAX.\",\n    \"Market analysis suggests accumulation phase for Bitcoin. Time to buy?\"\n  ];\n  \n  return [{\n    json: {\n      texts: fallbackTexts,  // MUST be named \"texts\" for the HTTP Request\n      is_fallback: true,\n      original_items: items.length\n    }\n  }];\n}\n\n// Return with \"texts\" array\nreturn [{\n  json: {\n    texts: texts,  // MUST be named \"texts\" for the HTTP Request\n    count: texts.length,\n    sample: texts[0]?.substring(0, 50) + \"...\",\n    extracted_at: new Date().toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -48,
+        16
+      ],
+      "id": "31f1b0c4-ca16-4a4f-998f-eb3a16f2cd6b",
+      "name": "sentiment_crypto"
+    },
+    {
+      "parameters": {
+        "jsCode": "// COMPLETE DEBUG FUNCTION: Extract and format texts for Flask API\nconsole.log(\"=== DEBUG: TEXT EXTRACTION ===\");\n\n// Log the full input structure\nconsole.log(\"Number of input items:\", items.length);\nconsole.log(\"Full input structure:\");\nconsole.log(JSON.stringify(items, null, 2));\n\n// Extract texts from all possible formats\nlet extractedTexts = [];\n\nitems.forEach((item, index) => {\n  const data = item.json;\n  \n  console.log(`\\n=== Processing item ${index} ===`);\n  console.log(\"Data type:\", typeof data);\n  console.log(\"Is array?\", Array.isArray(data));\n  console.log(\"Keys:\", Object.keys(data));\n  \n  // CASE 1: Data is already an array of texts\n  if (Array.isArray(data)) {\n    console.log(`✅ Item ${index}: Direct array with ${data.length} items`);\n    data.forEach((text, i) => {\n      if (typeof text === 'string' && text.trim()) {\n        extractedTexts.push(text.trim());\n        if (i < 2) console.log(`  Text ${i}: ${text.substring(0, 80)}...`);\n      }\n    });\n  }\n  // CASE 2: Data has 'texts' array\n  else if (data.texts && Array.isArray(data.texts)) {\n    console.log(`✅ Item ${index}: Has 'texts' array with ${data.texts.length} items`);\n    data.texts.forEach((text, i) => {\n      if (typeof text === 'string' && text.trim()) {\n        extractedTexts.push(text.trim());\n        if (i < 2) console.log(`  Text ${i}: ${text.substring(0, 80)}...`);\n      }\n    });\n  }\n  // CASE 3: Data has 'apiTexts' array\n  else if (data.apiTexts && Array.isArray(data.apiTexts)) {\n    console.log(`✅ Item ${index}: Has 'apiTexts' array with ${data.apiTexts.length} items`);\n    data.apiTexts.forEach((text, i) => {\n      if (typeof text === 'string' && text.trim()) {\n        extractedTexts.push(text.trim());\n        if (i < 2) console.log(`  Text ${i}: ${text.substring(0, 80)}...`);\n      }\n    });\n  }\n  // CASE 4: Data has single 'text' field\n  else if (data.text && typeof data.text === 'string' && data.text.trim()) {\n    console.log(`✅ Item ${index}: Has 'text' field`);\n    extractedTexts.push(data.text.trim());\n    console.log(`  Text: ${data.text.substring(0, 80)}...`);\n  }\n  // CASE 5: Data has 'Content' field\n  else if (data.Content && typeof data.Content === 'string' && data.Content.trim()) {\n    console.log(`✅ Item ${index}: Has 'Content' field`);\n    extractedTexts.push(data.Content.trim());\n    console.log(`  Content: ${data.Content.substring(0, 80)}...`);\n  }\n  // CASE 6: Data has 'content' field\n  else if (data.content && typeof data.content === 'string' && data.content.trim()) {\n    console.log(`✅ Item ${index}: Has 'content' field`);\n    extractedTexts.push(data.content.trim());\n    console.log(`  content: ${data.content.substring(0, 80)}...`);\n  }\n  // CASE 7: Data is an object with string values that could be text\n  else if (data && typeof data === 'object') {\n    console.log(`⚠️ Item ${index}: Object without recognized text fields`);\n    \n    // Try to find any string field longer than 10 characters\n    let foundText = false;\n    for (const [key, value] of Object.entries(data)) {\n      if (typeof value === 'string' && value.trim().length > 10) {\n        console.log(`  Potential text in '${key}': ${value.substring(0, 60)}...`);\n        extractedTexts.push(value.trim());\n        foundText = true;\n        break; // Just take the first one\n      }\n    }\n    \n    if (!foundText) {\n      console.log(`  No suitable text found in object keys: ${Object.keys(data)}`);\n    }\n  }\n  // CASE 8: Unrecognized format\n  else {\n    console.log(`❌ Item ${index}: Unrecognized format`);\n    console.log(\"  Data:\", JSON.stringify(data, null, 2));\n  }\n});\n\nconsole.log(`\\n📊 EXTRACTION SUMMARY:`);\nconsole.log(`Total texts extracted: ${extractedTexts.length}`);\n\nif (extractedTexts.length > 0) {\n  console.log(\"First 3 extracted texts:\");\n  extractedTexts.slice(0, 3).forEach((text, i) => {\n    console.log(`  ${i}: ${text.substring(0, 100)}...`);\n  });\n} else {\n  console.log(\"❌ NO TEXTS FOUND!\");\n  console.log(\"Input structure analysis:\");\n  items.forEach((item, index) => {\n    console.log(`  Item ${index}:`, JSON.stringify(item.json, null, 2));\n  });\n}\n\n// If no texts found, create meaningful error instead of fake data\nif (extractedTexts.length === 0) {\n  return [{\n    json: {\n      error: \"No text content found in input\",\n      debug_info: {\n        input_structure: items.map(item => ({\n          type: typeof item.json,\n          is_array: Array.isArray(item.json),\n          keys: Object.keys(item.json),\n          sample_values: Object.entries(item.json).slice(0, 3).map(([k, v]) => ({\n            key: k,\n            type: typeof v,\n            value_preview: typeof v === 'string' ? v.substring(0, 50) + '...' : String(v).substring(0, 50)\n          }))\n        })),\n        suggestions: [\n          \"Ensure your data has one of: 'texts' array, 'apiTexts' array, 'text' field, or 'Content' field\",\n          \"Or send a direct array of strings\",\n          \"Example format: { 'texts': ['Bitcoin bullish', 'Ethereum stable'] }\"\n        ]\n      }\n    },\n    pairedItem: { item: 0 }\n  }];\n}\n\n// Return in format that works for both n8n AND Flask\n// n8n requires json to be an OBJECT\n// Flask /analyze/batch accepts: direct array OR object with 'texts' key\nreturn [{\n  json: {\n    // This creates an object for n8n compatibility\n    // The HTTP Request node will use expression to extract just the array\n    textsArray: extractedTexts,\n    \n    // Debug metadata\n    _debug: {\n      extraction_successful: true,\n      source_item_count: items.length,\n      extracted_count: extractedTexts.length,\n      timestamp: new Date().toISOString(),\n      input_analysis: items.map(item => ({\n        has_texts: !!(item.json && item.json.texts),\n        has_apiTexts: !!(item.json && item.json.apiTexts),\n        has_text: !!(item.json && item.json.text),\n        has_Content: !!(item.json && item.json.Content),\n        is_direct_array: Array.isArray(item.json)\n      }))\n    }\n  },\n  pairedItem: { item: 0 }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        80,
+        192
+      ],
+      "id": "699fde84-2974-4ad4-885f-33c32eaeccb5",
+      "name": "debug"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Function: Format sentiment results for email - COMPLETE FIXED VERSION\nconsole.log(\"=== FORMATTING EMAIL FROM SENTIMENT RESULTS ===\");\n\n// Get ALL items from previous node, not just the first\nconst allItems = $input.all();\nconsole.log(`Received ${allItems.length} items from previous node`);\n\n// Extract sentiment results from all items\nlet sentimentResults = [];\n\nallItems.forEach((item, index) => {\n    console.log(`\\n--- Processing item ${index} ---`);\n    \n    if (item && item.json) {\n        const itemData = item.json;\n        \n        // Handle different data structures in each item\n        if (Array.isArray(itemData)) {\n            // Item contains an array of results\n            console.log(`Item ${index} contains array with ${itemData.length} results`);\n            sentimentResults = sentimentResults.concat(itemData);\n        } else if (itemData.results && Array.isArray(itemData.results)) {\n            // Item contains results in .results property\n            console.log(`Item ${index} has .results array with ${itemData.results.length} results`);\n            sentimentResults = sentimentResults.concat(itemData.results);\n        } else if (itemData.sentiment || itemData.sentiment_score || itemData.sentiment_label) {\n            // Item is a single sentiment result\n            console.log(`Item ${index} is a single sentiment result`);\n            sentimentResults.push(itemData);\n        } else if (itemData.text || itemData.content) {\n            // Item has text content, might be a sentiment result\n            console.log(`Item ${index} has text content`);\n            sentimentResults.push(itemData);\n        } else {\n            console.log(`Item ${index} has unknown structure:`, Object.keys(itemData));\n        }\n    }\n});\n\n// If we still have no results, try to extract from first item\nif (sentimentResults.length === 0 && allItems.length > 0) {\n    console.log(\"Trying alternative extraction method...\");\n    \n    // Try to extract from the first item in different ways\n    const firstItemData = allItems[0].json;\n    \n    if (firstItemData && typeof firstItemData === 'object') {\n        // Check for common array properties\n        const arrayProps = ['sentiments', 'results', 'data', 'analysis', 'items', 'messages', 'sentimentResults'];\n        for (const prop of arrayProps) {\n            if (Array.isArray(firstItemData[prop])) {\n                console.log(`Found array in first item property: ${prop}`);\n                sentimentResults = firstItemData[prop];\n                break;\n            }\n        }\n        \n        // If still not found, check if any property is an array\n        if (sentimentResults.length === 0) {\n            for (const key in firstItemData) {\n                if (Array.isArray(firstItemData[key])) {\n                    console.log(`Found array in first item key: ${key}`);\n                    sentimentResults = firstItemData[key];\n                    break;\n                }\n            }\n        }\n    }\n}\n\nconsole.log(`\\n✅ Total sentiment results to process: ${sentimentResults.length}`);\n\nif (sentimentResults.length > 0) {\n    console.log(\"Sample results:\");\n    sentimentResults.slice(0, 3).forEach((result, index) => {\n        console.log(`Result ${index + 1}:`, {\n            text: result.text ? result.text.substring(0, 50) + '...' : 'No text',\n            sentiment: result.sentiment_label || result.sentiment || result.label,\n            score: result.sentiment_score || result.score\n        });\n    });\n}\n\n// Calculate statistics\nlet totalPositive = 0;\nlet totalNegative = 0;\nlet totalNeutral = 0;\nlet totalScore = 0;\n\nsentimentResults.forEach((result, index) => {\n    // Handle different possible property names\n    const sentiment = result.sentiment_label || result.sentiment || result.label || result.sentimentLabel;\n    const score = result.sentiment_score || result.score || result.sentimentScore || result.confidence || 0;\n    \n    if (sentiment === 'positive' || sentiment === 'Positive' || (score > 0.05 && !sentiment)) {\n        totalPositive++;\n    } else if (sentiment === 'negative' || sentiment === 'Negative' || (score < -0.05 && !sentiment)) {\n        totalNegative++;\n    } else {\n        totalNeutral++;\n    }\n    \n    totalScore += parseFloat(score) || 0;\n});\n\nconst averageScore = sentimentResults.length > 0 ? totalScore / sentimentResults.length : 0;\n\nconsole.log(\"\\n📊 Statistics calculated:\");\nconsole.log(`- Total Positive: ${totalPositive}`);\nconsole.log(`- Total Negative: ${totalNegative}`);\nconsole.log(`- Total Neutral: ${totalNeutral}`);\nconsole.log(`- Average Score: ${averageScore.toFixed(3)}`);\n\n// ============== HTML CONTENT CREATION ==============\nconst htmlContent = `\n<!DOCTYPE html>\n<html>\n<head>\n    <meta charset=\"UTF-8\">\n    <style>\n        body {\n            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;\n            line-height: 1.6;\n            color: #333;\n            max-width: 800px;\n            margin: 0 auto;\n            padding: 20px;\n        }\n        .header {\n            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);\n            color: white;\n            padding: 30px;\n            border-radius: 10px 10px 0 0;\n            text-align: center;\n        }\n        .header h1 {\n            margin: 0;\n            font-size: 28px;\n        }\n        .header p {\n            margin: 10px 0 0;\n            opacity: 0.9;\n        }\n        .stats-container {\n            background: #f8f9fa;\n            padding: 25px;\n            border-radius: 10px;\n            margin: 20px 0;\n            box-shadow: 0 2px 10px rgba(0,0,0,0.1);\n        }\n        .stats-grid {\n            display: grid;\n            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));\n            gap: 20px;\n            margin-top: 15px;\n        }\n        .stat-card {\n            background: white;\n            padding: 20px;\n            border-radius: 8px;\n            text-align: center;\n            box-shadow: 0 2px 5px rgba(0,0,0,0.05);\n        }\n        .stat-value {\n            font-size: 32px;\n            font-weight: bold;\n            margin: 10px 0;\n        }\n        .positive { color: #10b981; }\n        .negative { color: #ef4444; }\n        .neutral { color: #6b7280; }\n        .results-table {\n            width: 100%;\n            border-collapse: collapse;\n            margin: 25px 0;\n            box-shadow: 0 1px 3px rgba(0,0,0,0.1);\n        }\n        .results-table th {\n            background: #4f46e5;\n            color: white;\n            padding: 15px;\n            text-align: left;\n            font-weight: 600;\n        }\n        .results-table td {\n            padding: 15px;\n            border-bottom: 1px solid #e5e7eb;\n        }\n        .results-table tr:hover {\n            background: #f9fafb;\n        }\n        .sentiment-badge {\n            display: inline-block;\n            padding: 4px 12px;\n            border-radius: 20px;\n            font-size: 12px;\n            font-weight: 600;\n            text-transform: uppercase;\n        }\n        .badge-positive { background: #d1fae5; color: #065f46; }\n        .badge-negative { background: #fee2e2; color: #991b1b; }\n        .badge-neutral { background: #e5e7eb; color: #374151; }\n        .text-preview {\n            max-width: 300px;\n            white-space: nowrap;\n            overflow: hidden;\n            text-overflow: ellipsis;\n        }\n        .footer {\n            text-align: center;\n            margin-top: 30px;\n            padding-top: 20px;\n            border-top: 1px solid #e5e7eb;\n            color: #6b7280;\n            font-size: 14px;\n        }\n        .score-bar {\n            width: 100%;\n            height: 6px;\n            background: #e5e7eb;\n            border-radius: 3px;\n            overflow: hidden;\n            margin-top: 5px;\n        }\n        .score-fill {\n            height: 100%;\n            background: #4f46e5;\n            border-radius: 3px;\n        }\n    </style>\n</head>\n<body>\n    <div class=\"header\">\n        <h1>📈 Crypto Sentiment Analysis Report</h1>\n        <p>Real-time cryptocurrency market sentiment analysis</p>\n        <p><small>Generated: ${new Date().toLocaleString()}</small></p>\n    </div>\n    \n    <div class=\"stats-container\">\n        <h2 style=\"margin-top: 0; color: #4f46e5;\">📊 Executive Summary</h2>\n        <div class=\"stats-grid\">\n            <div class=\"stat-card\">\n                <div>Total Analysis</div>\n                <div class=\"stat-value\">${sentimentResults.length}</div>\n                <div>crypto text${sentimentResults.length === 1 ? '' : 's'} analyzed</div>\n            </div>\n            <div class=\"stat-card\">\n                <div>Positive Sentiment</div>\n                <div class=\"stat-value positive\">${totalPositive}</div>\n                <div>${sentimentResults.length > 0 ? ((totalPositive / sentimentResults.length) * 100).toFixed(1) : 0}% bullish</div>\n            </div>\n            <div class=\"stat-card\">\n                <div>Negative Sentiment</div>\n                <div class=\"stat-value negative\">${totalNegative}</div>\n                <div>${sentimentResults.length > 0 ? ((totalNegative / sentimentResults.length) * 100).toFixed(1) : 0}% bearish</div>\n            </div>\n            <div class=\"stat-card\">\n                <div>Average Score</div>\n                <div class=\"stat-value\">${averageScore.toFixed(3)}</div>\n                <div>Overall market sentiment</div>\n            </div>\n        </div>\n    </div>\n    \n    <h2 style=\"color: #4f46e5;\">🔍 Detailed Analysis Results</h2>\n    \n    <table class=\"results-table\">\n        <thead>\n            <tr>\n                <th>#</th>\n                <th>Text Preview</th>\n                <th>Sentiment</th>\n                <th>Score</th>\n                <th>Analysis Details</th>\n                <th>Timestamp</th>\n            </tr>\n        </thead>\n        <tbody>\n            ${sentimentResults.length > 0 ? sentimentResults.map((result, index) => {\n                const sentiment = result.sentiment_label || result.sentiment || result.label || result.sentimentLabel || 'neutral';\n                const score = result.sentiment_score || result.score || result.sentimentScore || result.confidence || 0;\n                const text = result.text || result.content || result.message || result.original_text || 'N/A';\n                const positiveScore = result.positive_score || result.positive || result.pos_score || 0;\n                const negativeScore = result.negative_score || result.negative || result.neg_score || 0;\n                const neutralScore = result.neutral_score || result.neutral || result.neu_score || 0;\n                const analyzedAt = result.analyzed_at || result.timestamp || result.created_at || result.date || new Date().toISOString();\n                \n                const badgeClass = sentiment.toLowerCase() === 'positive' ? 'badge-positive' :\n                                 sentiment.toLowerCase() === 'negative' ? 'badge-negative' : 'badge-neutral';\n                \n                // Calculate score bar width (normalize score from -1 to 1 to 0-100%)\n                const scorePercent = ((parseFloat(score) + 1) / 2 * 100);\n                \n                return `\n                <tr>\n                    <td><strong>${index + 1}</strong></td>\n                    <td class=\"text-preview\" title=\"${text.replace(/\"/g, '&quot;')}\">\n                        ${text.substring(0, 60) + (text.length > 60 ? '...' : '')}\n                    </td>\n                    <td>\n                        <span class=\"sentiment-badge ${badgeClass}\">\n                            ${sentiment}\n                        </span>\n                    </td>\n                    <td>\n                        ${parseFloat(score).toFixed(3)}\n                        <div class=\"score-bar\">\n                            <div class=\"score-fill\" style=\"width: ${scorePercent}%\"></div>\n                        </div>\n                    </td>\n                    <td>\n                        <small>\n                            Pos: ${parseFloat(positiveScore).toFixed(3)} | \n                            Neg: ${parseFloat(negativeScore).toFixed(3)} | \n                            Neu: ${parseFloat(neutralScore).toFixed(3)}\n                        </small>\n                    </td>\n                    <td>\n                        <small>${new Date(analyzedAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</small>\n                    </td>\n                </tr>\n                `;\n            }).join('') : `\n            <tr>\n                <td colspan=\"6\" style=\"text-align: center; padding: 40px; color: #6b7280;\">\n                    No sentiment analysis results available\n                </td>\n            </tr>\n            `}\n        </tbody>\n    </table>\n    \n    <div class=\"stats-container\">\n        <h2 style=\"color: #4f46e5;\">📈 Sentiment Distribution</h2>\n        <div style=\"display: flex; align-items: center; gap: 20px;\">\n            <div style=\"flex: 1;\">\n                <div style=\"display: flex; justify-content: space-between; margin-bottom: 5px;\">\n                    <span>Positive</span>\n                    <span>${totalPositive} (${sentimentResults.length > 0 ? ((totalPositive / sentimentResults.length) * 100).toFixed(1) : 0}%)</span>\n                </div>\n                <div style=\"width: 100%; height: 10px; background: #e5e7eb; border-radius: 5px; overflow: hidden;\">\n                    <div style=\"width: ${sentimentResults.length > 0 ? (totalPositive / sentimentResults.length) * 100 : 0}%; height: 100%; background: #10b981;\"></div>\n                </div>\n                \n                <div style=\"display: flex; justify-content: space-between; margin: 15px 0 5px;\">\n                    <span>Negative</span>\n                    <span>${totalNegative} (${sentimentResults.length > 0 ? ((totalNegative / sentimentResults.length) * 100).toFixed(1) : 0}%)</span>\n                </div>\n                <div style=\"width: 100%; height: 10px; background: #e5e7eb; border-radius: 5px; overflow: hidden;\">\n                    <div style=\"width: ${sentimentResults.length > 0 ? (totalNegative / sentimentResults.length) * 100 : 0}%; height: 100%; background: #ef4444;\"></div>\n                </div>\n                \n                <div style=\"display: flex; justify-content: space-between; margin: 15px 0 5px;\">\n                    <span>Neutral</span>\n                    <span>${totalNeutral} (${sentimentResults.length > 0 ? ((totalNeutral / sentimentResults.length) * 100).toFixed(1) : 0}%)</span>\n                </div>\n                <div style=\"width: 100%; height: 10px; background: #e5e7eb; border-radius: 5px; overflow: hidden;\">\n                    <div style=\"width: ${sentimentResults.length > 0 ? (totalNeutral / sentimentResults.length) * 100 : 0}%; height: 100%; background: #6b7280;\"></div>\n                </div>\n            </div>\n            <div style=\"flex: 1; text-align: center;\">\n                <div style=\"font-size: 14px; color: #6b7280; margin-bottom: 10px;\">Overall Market Mood</div>\n                <div style=\"font-size: 32px; font-weight: bold; color: ${averageScore > 0.1 ? '#10b981' : averageScore < -0.1 ? '#ef4444' : '#6b7280'}\">\n                    ${averageScore > 0.1 ? '🐂 Bullish' : averageScore < -0.1 ? '🐻 Bearish' : '😐 Neutral'}\n                </div>\n                <div style=\"margin-top: 10px; font-size: 14px; color: #6b7280;\">\n                    Score: ${averageScore.toFixed(3)}\n                </div>\n            </div>\n        </div>\n    </div>\n    \n    <div class=\"footer\">\n        <p>🔒 This report was automatically generated by the Crypto Sentiment Analysis Platform</p>\n        <p>Analysis Method: ${sentimentResults[0]?.analysis_method || sentimentResults[0]?.method || 'VADER'} | Source: ${sentimentResults[0]?.source || 'API'}</p>\n        <p>💡 <em>Positive score > 0.05 | Negative score < -0.05 | Neutral in between</em></p>\n        <p><small>Processed ${sentimentResults.length} item${sentimentResults.length === 1 ? '' : 's'} at ${new Date().toLocaleTimeString()}</small></p>\n    </div>\n</body>\n</html>\n`;\n\n// ============== TEXT CONTENT CREATION ==============\nconst textContent = `\nCRYPTO SENTIMENT ANALYSIS REPORT\n================================\n\nGenerated: ${new Date().toLocaleString()}\nTotal Analyses: ${sentimentResults.length}\n\nSUMMARY:\n--------\n• Positive Sentiment: ${totalPositive} (${sentimentResults.length > 0 ? ((totalPositive / sentimentResults.length) * 100).toFixed(1) : 0}%)\n• Negative Sentiment: ${totalNegative} (${sentimentResults.length > 0 ? ((totalNegative / sentimentResults.length) * 100).toFixed(1) : 0}%)\n• Neutral Sentiment: ${totalNeutral} (${sentimentResults.length > 0 ? ((totalNeutral / sentimentResults.length) * 100).toFixed(1) : 0}%)\n• Average Score: ${averageScore.toFixed(3)}\n\nDETAILED RESULTS:\n-----------------\n${sentimentResults.length > 0 ? sentimentResults.map((result, index) => {\n    const sentiment = result.sentiment_label || result.sentiment || result.label || result.sentimentLabel || 'neutral';\n    const score = result.sentiment_score || result.score || result.sentimentScore || result.confidence || 0;\n    const text = result.text || result.content || result.message || result.original_text || 'N/A';\n    const analyzedAt = result.analyzed_at || result.timestamp || result.created_at || result.date || new Date().toISOString();\n    \n    return `\n${index + 1}. ${text}\n   Sentiment: ${sentiment} (Score: ${parseFloat(score).toFixed(3)})\n   Positive: ${result.positive_score || result.positive || result.pos_score || 0} | Negative: ${result.negative_score || result.negative || result.neg_score || 0} | Neutral: ${result.neutral_score || result.neutral || result.neu_score || 0}\n   Time: ${new Date(analyzedAt).toLocaleTimeString()}\n`;\n}).join('') : 'No results available'}\n\nOverall Market Mood: ${averageScore > 0.1 ? 'BULLISH 🐂' : averageScore < -0.1 ? 'BEARISH 🐻' : 'NEUTRAL 🐐'}\n\n--\nGenerated by Crypto Sentiment Analysis Platform\nAnalysis Method: ${sentimentResults[0]?.analysis_method || sentimentResults[0]?.method || 'VADER'}\nProcessed ${sentimentResults.length} item${sentimentResults.length === 1 ? '' : 's'}\n`;\n\n// ============== RETURN EMAIL DATA ==============\nconsole.log(`\\n✅ Email content created successfully!`);\nconsole.log(`- HTML length: ${htmlContent.length} characters`);\nconsole.log(`- Text length: ${textContent.length} characters`);\nconsole.log(`- Will send to: daaoudi.info@gmail.com`);\n\nreturn [{\n    json: {\n        // Email configuration\n        to: \"daaoudi.info@gmail.com\",\n        subject: `📊 Crypto Sentiment Report - ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`,\n        \n        // Email content (both HTML and text)\n        html: htmlContent,\n        text: textContent,\n        \n        // Metadata\n        totalResults: sentimentResults.length,\n        positiveCount: totalPositive,\n        negativeCount: totalNegative,\n        neutralCount: totalNeutral,\n        averageScore: averageScore.toFixed(3),\n        \n        // Debug info\n        _debug: {\n            source: \"sentiment_analysis_api\",\n            generatedAt: new Date().toISOString(),\n            totalItemsReceived: allItems.length,\n            resultsExtracted: sentimentResults.length,\n            extractionMethod: \"multiple_items_processing\"\n        }\n    },\n    pairedItem: { item: 0 }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        656,
+        256
+      ],
+      "id": "bd27952f-bf78-4508-b202-043851f6dd3e",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "sendTo": "daaoudi.info@gmail.com",
+        "subject": "Crypto Sentiment Report",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": true
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        864,
+        256
+      ],
+      "id": "52409e6c-ad76-4cf6-a825-c9bc01ae5cbf",
+      "name": "Send a message",
+      "webhookId": "388f81bc-d478-45bb-9cb1-3c464e42a318",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "uRkGNm5TS67oNBw8",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "daaoudi.info@gmail.com",
+        "subject": "crypto currencies info",
+        "message": "={{ $json.html }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        352,
+        -288
+      ],
+      "id": "ef56aa9a-2fff-4710-8131-779c0088c5c8",
+      "name": "Send a message1",
+      "webhookId": "01c79bbf-224c-4fd9-b077-9890feef84ec",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "uRkGNm5TS67oNBw8",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format crypto data as email content - PROCESSES ALL ITEMS\nconsole.log(\"=== FORMATTING CRYPTO DATA FOR EMAIL ===\");\n\n// Get ALL items from previous node (crypto formatter)\nconst allItems = $input.all();\nconsole.log(`Received ${allItems.length} items from crypto formatter`);\n\n// Collect ALL crypto data from all items\nlet allCryptoData = [];\n\nallItems.forEach((item, index) => {\n    console.log(`\\n--- Processing item ${index + 1}/${allItems.length} ---`);\n    \n    if (item && item.json) {\n        const itemData = item.json;\n        \n        // Handle different data structures in each item\n        if (Array.isArray(itemData)) {\n            // Item contains an array of crypto data\n            console.log(`✅ Item ${index + 1}: Array with ${itemData.length} cryptocurrencies`);\n            allCryptoData = allCryptoData.concat(itemData);\n        } else if (itemData.cryptocurrency || itemData.current_price_usd || itemData.price) {\n            // Item is a single cryptocurrency object\n            console.log(`✅ Item ${index + 1}: Single cryptocurrency (${itemData.cryptocurrency || 'Unknown'})`);\n            allCryptoData.push(itemData);\n        } else if (itemData.data && Array.isArray(itemData.data)) {\n            // Item contains crypto data in 'data' property\n            console.log(`✅ Item ${index + 1}: Found ${itemData.data.length} items in 'data' array`);\n            allCryptoData = allCryptoData.concat(itemData.data);\n        } else if (itemData.market_statistics) {\n            // Item has market statistics (might be a summary item)\n            console.log(`✅ Item ${index + 1}: Item with market statistics`);\n            allCryptoData.push(itemData);\n        } else {\n            console.log(`❓ Item ${index + 1}: Unknown structure, keys:`, Object.keys(itemData));\n        }\n    }\n});\n\nconsole.log(`\\n📊 Total cryptocurrencies collected: ${allCryptoData.length}`);\n\n// Remove duplicates based on cryptocurrency symbol\nconst uniqueCryptoData = [];\nconst seenSymbols = new Set();\n\nallCryptoData.forEach(coin => {\n    const symbol = coin.cryptocurrency || coin.symbol || coin.coin_id || 'UNKNOWN';\n    if (!seenSymbols.has(symbol)) {\n        seenSymbols.add(symbol);\n        uniqueCryptoData.push(coin);\n    }\n});\n\nconsole.log(`✅ Unique cryptocurrencies: ${uniqueCryptoData.length}`);\n\n// Log sample data\nif (uniqueCryptoData.length > 0) {\n    console.log(\"\\n📋 Sample cryptocurrencies:\");\n    uniqueCryptoData.slice(0, 5).forEach((coin, index) => {\n        console.log(`${index + 1}. ${coin.cryptocurrency || coin.symbol}: $${coin.current_price_usd || coin.price} (${coin.price_change_24h_percent || 0}%)`);\n    });\n}\n\n// If we have no data, create sample data\nlet cryptoData = uniqueCryptoData;\nif (cryptoData.length === 0) {\n    console.log(\"⚠️ No crypto data found, creating sample data\");\n    cryptoData = [\n        {\n            cryptocurrency: 'BTC',\n            coin_name: 'Bitcoin',\n            current_price_usd: 70346.42,\n            price_change_24h_percent: -1.35,\n            market_cap_usd: 1380000000000,\n            trading_volume_24h: 32500000000,\n            market_cap_rank: 1\n        },\n        {\n            cryptocurrency: 'ETH',\n            coin_name: 'Ethereum',\n            current_price_usd: 3850.25,\n            price_change_24h_percent: 0.75,\n            market_cap_usd: 462000000000,\n            trading_volume_24h: 15800000000,\n            market_cap_rank: 2\n        },\n        {\n            cryptocurrency: 'SOL',\n            coin_name: 'Solana',\n            current_price_usd: 102.48,\n            price_change_24h_percent: 3.25,\n            market_cap_usd: 45000000000,\n            trading_volume_24h: 2500000000,\n            market_cap_rank: 5\n        },\n        {\n            cryptocurrency: 'BNB',\n            coin_name: 'Binance Coin',\n            current_price_usd: 405.25,\n            price_change_24h_percent: 1.25,\n            market_cap_usd: 62000000000,\n            trading_volume_24h: 1800000000,\n            market_cap_rank: 4\n        },\n        {\n            cryptocurrency: 'ADA',\n            coin_name: 'Cardano',\n            current_price_usd: 0.65,\n            price_change_24h_percent: -0.5,\n            market_cap_usd: 23000000000,\n            trading_volume_24h: 450000000,\n            market_cap_rank: 8\n        }\n    ];\n}\n\n// Calculate statistics\nconst calculateStats = (data) => {\n    const prices = data.map(coin => coin.current_price_usd || coin.price || 0);\n    const changes = data.map(coin => coin.price_change_24h_percent || 0);\n    const totalMarketCap = data.reduce((sum, coin) => sum + (coin.market_cap_usd || 0), 0);\n    \n    return {\n        total_cryptocurrencies: data.length,\n        average_price: parseFloat((prices.reduce((a, b) => a + b, 0) / prices.length).toFixed(2)),\n        average_daily_change: parseFloat((changes.reduce((a, b) => a + b, 0) / changes.length).toFixed(2)),\n        top_gainer: data.reduce((max, item) => \n            (item.price_change_24h_percent || 0) > (max.price_change_24h_percent || 0) ? item : max\n        ).cryptocurrency,\n        top_loser: data.reduce((min, item) => \n            (item.price_change_24h_percent || 0) < (min.price_change_24h_percent || 0) ? item : min\n        ).cryptocurrency,\n        market_dominance: data\n            .filter(item => ['BTC', 'ETH', 'BNB', 'SOL'].includes(item.cryptocurrency))\n            .map(item => ({\n                coin: item.cryptocurrency,\n                dominance: totalMarketCap > 0 ? parseFloat((((item.market_cap_usd || 0) / totalMarketCap) * 100).toFixed(2)) : 0\n            }))\n    };\n};\n\nconst stats = calculateStats(cryptoData);\n\n// Create HTML report\nconst htmlContent = `\n<!DOCTYPE html>\n<html>\n<head>\n    <meta charset=\"UTF-8\">\n    <style>\n        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }\n        .container { max-width: 1000px; margin: 0 auto; background: white; border-radius: 10px; padding: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }\n        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; border-radius: 10px; margin-bottom: 30px; text-align: center; }\n        .header h1 { margin: 0; font-size: 28px; }\n        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 30px 0; }\n        .stat-card { background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center; border-left: 4px solid #4f46e5; }\n        .stat-value { font-size: 32px; font-weight: bold; margin: 10px 0; }\n        .positive { color: #10b981; }\n        .negative { color: #ef4444; }\n        .crypto-table { width: 100%; border-collapse: collapse; margin: 30px 0; }\n        .crypto-table th { background: #4f46e5; color: white; padding: 15px; text-align: left; font-weight: 600; }\n        .crypto-table td { padding: 15px; border-bottom: 1px solid #e5e7eb; }\n        .crypto-table tr:hover { background: #f9fafb; }\n        .change-positive { color: #10b981; font-weight: bold; }\n        .change-negative { color: #ef4444; font-weight: bold; }\n        .footer { text-align: center; margin-top: 40px; padding-top: 20px; border-top: 1px solid #e5e7eb; color: #6b7280; font-size: 14px; }\n        .price { font-weight: bold; }\n        .coin-name { color: #6b7280; font-size: 12px; }\n        .rank { background: #e5e7eb; padding: 3px 8px; border-radius: 12px; font-size: 12px; }\n    </style>\n</head>\n<body>\n    <div class=\"container\">\n        <div class=\"header\">\n            <h1>📈 Crypto Market Report</h1>\n            <p>Real-time cryptocurrency market analysis</p>\n            <p><small>Generated: ${new Date().toLocaleString()}</small></p>\n            <p><small>Source: ${allItems.length} data streams processed</small></p>\n        </div>\n        \n        <div style=\"background: #f0f9ff; padding: 20px; border-radius: 10px; margin-bottom: 20px; border-left: 4px solid #0ea5e9;\">\n            <h3 style=\"margin-top: 0; color: #0369a1;\">📊 Data Summary</h3>\n            <p>Processed <strong>${allItems.length} input items</strong> containing <strong>${allCryptoData.length} total cryptocurrencies</strong>.</p>\n            <p>After removing duplicates: <strong>${cryptoData.length} unique cryptocurrencies</strong> analyzed.</p>\n        </div>\n        \n        <h2 style=\"color: #4f46e5;\">🎯 Market Overview</h2>\n        <div class=\"stats-grid\">\n            <div class=\"stat-card\">\n                <div>Total Cryptocurrencies</div>\n                <div class=\"stat-value\">${stats.total_cryptocurrencies}</div>\n                <small>Unique assets</small>\n            </div>\n            <div class=\"stat-card\">\n                <div>Average Price</div>\n                <div class=\"stat-value\">$${stats.average_price.toLocaleString()}</div>\n                <small>Mean price across all</small>\n            </div>\n            <div class=\"stat-card\">\n                <div>Market Trend</div>\n                <div class=\"stat-value ${stats.average_daily_change >= 0 ? 'positive' : 'negative'}\">\n                    ${stats.average_daily_change.toFixed(2)}%\n                </div>\n                <small>24h average change</small>\n            </div>\n            <div class=\"stat-card\">\n                <div>Top Performer</div>\n                <div class=\"stat-value positive\">${stats.top_gainer}</div>\n                <small>Best 24h gain</small>\n            </div>\n        </div>\n        \n        <h2 style=\"color: #4f46e5;\">💰 Top Cryptocurrencies (${cryptoData.length} total)</h2>\n        <table class=\"crypto-table\">\n            <thead>\n                <tr>\n                    <th>Rank</th>\n                    <th>Cryptocurrency</th>\n                    <th>Price (USD)</th>\n                    <th>24h Change</th>\n                    <th>Market Cap</th>\n                    <th>Volume (24h)</th>\n                </tr>\n            </thead>\n            <tbody>\n                ${cryptoData.slice(0, 15).map((coin, index) => {\n                    const symbol = coin.cryptocurrency || coin.symbol || 'N/A';\n                    const name = coin.coin_name || coin.name || '';\n                    const price = coin.current_price_usd || coin.price || 0;\n                    const change = coin.price_change_24h_percent || 0;\n                    const marketCap = coin.market_cap_usd || 0;\n                    const volume = coin.trading_volume_24h || coin.volume24h || 0;\n                    const rank = coin.market_cap_rank || index + 1;\n                    \n                    return `\n                <tr>\n                    <td><span class=\"rank\">#${rank}</span></td>\n                    <td>\n                        <strong>${symbol}</strong><br>\n                        <span class=\"coin-name\">${name}</span>\n                    </td>\n                    <td class=\"price\">$${price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 6})}</td>\n                    <td class=\"${change >= 0 ? 'change-positive' : 'change-negative'}\">\n                        ${change.toFixed(2)}%\n                    </td>\n                    <td>$${(marketCap / 1000000000).toFixed(2)}B</td>\n                    <td>$${(volume / 1000000).toFixed(1)}M</td>\n                </tr>\n                `;\n                }).join('')}\n            </tbody>\n        </table>\n        \n        ${cryptoData.length > 15 ? `\n        <div style=\"text-align: center; margin: 20px 0; color: #6b7280;\">\n            <em>... and ${cryptoData.length - 15} more cryptocurrencies</em>\n        </div>\n        ` : ''}\n        \n        ${stats.market_dominance && stats.market_dominance.length > 0 ? `\n        <h2 style=\"color: #4f46e5;\">🏆 Market Dominance</h2>\n        <div style=\"background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;\">\n            ${stats.market_dominance.map(coin => `\n            <div style=\"margin: 10px 0;\">\n                <div style=\"display: flex; justify-content: space-between; margin-bottom: 5px;\">\n                    <span><strong>${coin.coin}</strong></span>\n                    <span><strong>${coin.dominance}%</strong> of total market</span>\n                </div>\n                <div style=\"width: 100%; height: 10px; background: #e5e7eb; border-radius: 5px; overflow: hidden;\">\n                    <div style=\"width: ${coin.dominance}%; height: 100%; background: #4f46e5;\"></div>\n                </div>\n            </div>\n            `).join('')}\n        </div>\n        ` : ''}\n        \n        <div class=\"footer\">\n            <p>🔒 This report was automatically generated by the Crypto Market Analysis Platform</p>\n            <p>Data Source: CoinGecko API | Updated: ${new Date().toISOString()}</p>\n            <p><small>Processed ${allItems.length} input streams | ${cryptoData.length} unique cryptocurrencies</small></p>\n            <p><small>⚠️ Cryptocurrency investments are subject to high market risk. Please do your own research.</small></p>\n        </div>\n    </div>\n</body>\n</html>\n`;\n\n// Create text version\nconst textContent = `\nCRYPTO MARKET REPORT\n================================\n\nGenerated: ${new Date().toLocaleString()}\n\nDATA SUMMARY:\n-------------\n• Input items processed: ${allItems.length}\n• Total cryptocurrencies collected: ${allCryptoData.length}\n• Unique cryptocurrencies analyzed: ${stats.total_cryptocurrencies}\n\nMARKET OVERVIEW:\n----------------\n• Average Price: $${stats.average_price.toLocaleString()}\n• Average Daily Change: ${stats.average_daily_change.toFixed(2)}%\n• Top Gainer: ${stats.top_gainer}\n• Top Loser: ${stats.top_loser}\n• Market Trend: ${stats.average_daily_change >= 0 ? 'BULLISH 📈' : 'BEARISH 📉'}\n\nTOP CRYPTOCURRENCIES (${Math.min(10, cryptoData.length)} of ${cryptoData.length}):\n-----------------------------------------------------------------\n${cryptoData.slice(0, 10).map((coin, index) => {\n    const symbol = coin.cryptocurrency || coin.symbol || 'N/A';\n    const name = coin.coin_name || coin.name || '';\n    const price = coin.current_price_usd || coin.price || 0;\n    const change = coin.price_change_24h_percent || 0;\n    const marketCap = coin.market_cap_usd || 0;\n    const volume = coin.trading_volume_24h || coin.volume24h || 0;\n    \n    return `\n${index + 1}. ${symbol} - ${name}\n   Price: $${price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 6})}\n   24h Change: ${change.toFixed(2)}%\n   Market Cap: $${(marketCap / 1000000000).toFixed(2)}B\n   Volume: $${(volume / 1000000).toFixed(1)}M\n`;\n}).join('')}\n\nMARKET DOMINANCE:\n-----------------\n${stats.market_dominance && stats.market_dominance.length > 0 ? \n  stats.market_dominance.map(coin => \n    `${coin.coin}: ${coin.dominance}% of total market`\n  ).join('\\n') : \n  'No dominance data available'}\n\nIMPORTANT DISCLAIMER:\n---------------------\nCryptocurrency investments are subject to high market risk.\nThis report is for informational purposes only and should not\nbe considered financial advice. Please do your own research\nbefore making any investment decisions.\n\n--\nGenerated by Crypto Market Analysis Platform\nData Source: CoinGecko API\nProcessed: ${allItems.length} streams | ${cryptoData.length} unique cryptocurrencies\nReport ID: ${Date.now()}\n`;\n\nconsole.log(`\\n✅ Email content created successfully!`);\nconsole.log(`- Processed ${allItems.length} input items`);\nconsole.log(`- Collected ${allCryptoData.length} total cryptocurrencies`);\nconsole.log(`- Analyzing ${cryptoData.length} unique cryptocurrencies`);\nconsole.log(`- HTML length: ${htmlContent.length} characters`);\nconsole.log(`- Text length: ${textContent.length} characters`);\nconsole.log(`- Will send to: daaoudi.info@gmail.com`);\n\nreturn [{\n  json: {\n    // Email configuration\n    to: \"daaoudi.info@gmail.com\",\n    subject: `📊 Crypto Market Report - ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`,\n    \n    // Email content\n    html: htmlContent,\n    text: textContent,\n    \n    // Metadata\n    total_input_items: allItems.length,\n    total_cryptocurrencies: allCryptoData.length,\n    unique_cryptocurrencies: cryptoData.length,\n    average_price: stats.average_price,\n    market_trend: stats.average_daily_change >= 0 ? 'bullish' : 'bearish',\n    report_generated_at: new Date().toISOString(),\n    \n    // Debug info\n    _debug: {\n      input_items_processed: allItems.length,\n      crypto_data_collected: allCryptoData.length,\n      unique_crypto_analyzed: cryptoData.length,\n      sample_cryptocurrencies: cryptoData.slice(0, 3).map(c => ({\n        symbol: c.cryptocurrency || c.symbol,\n        price: c.current_price_usd || c.price,\n        change: c.price_change_24h_percent\n      })),\n      timestamp: new Date().toISOString()\n    }\n  },\n  pairedItem: { item: 0 }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        96,
+        -320
+      ],
+      "id": "2c4feb05-86c3-4137-a1c3-bcf99843f15d",
+      "name": "Code in JavaScript3"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "HTTP Request1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request1": {
+      "main": [
+        [
+          {
+            "node": "Extract from File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File": {
+      "main": [
+        [
+          {
+            "node": "sentiment_crypto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request2": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "sentiment_crypto": {
+      "main": [
+        [
+          {
+            "node": "debug",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "debug": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript3": {
+      "main": [
+        [
+          {
+            "node": "Send a message1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "b7ad8ad9-9106-4ba4-8b83-0b54894a3325",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "c6c4360d80502dd92ebd3886be07ac16cde08e9bf6cde6d8af5c2c3e9862386f"
+  },
+  "id": "AcekBC3wQ2Rj1K_k8hxyq",
+  "tags": []
+}
