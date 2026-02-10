@@ -34,7 +34,7 @@ torch==2.0.1
 scipy==1.10.1
 requests==2.31.0
 
-![Description de l'image](n8n_workflow_arrows_visible.png)
+![Description de l'image](backend/img/n8n_workflow_arrows_visible.png)
 
 
 
@@ -396,6 +396,7 @@ Pour toute question ou problème :
 Projet éducatif - Libre d'utilisation et modification
 
 ✨ Développé avec n8n, Flask et passion pour les cryptomonnaies ✨
+
 
 
 
