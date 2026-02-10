@@ -47,8 +47,8 @@ mkdir crypto-analysis-platform
 cd crypto-analysis-platform
 2.	Créer la structure des fichiers
 crypto-analysis-platform/
-```markdown
-```text
+```
+crypto-analysis-platform/
 ├── data/
 │   ├── crypto_10k_tweets.csv
 │   └── clean_crypto_tweets.py
@@ -59,7 +59,7 @@ crypto-analysis-platform/
 ├── n8n/
 │   └── workflow.json
 └── README.md
-
+```
 Étape 2 : Script de nettoyage des données
 data/clean_crypto_tweets.py
 """
@@ -389,5 +389,6 @@ Pour toute question ou problème :
 Projet éducatif - Libre d'utilisation et modification
 
 ✨ Développé avec n8n, Flask et passion pour les cryptomonnaies ✨
+
 
 
